@@ -65,10 +65,9 @@ class GAT_LSTM(torch.nn.Module):
         self.gat_lyr2 = MultiHeadsGATLayer(a_sparse2, self.seq_len, self.seq_len, head_n=1)
         self.gcn = nn.Linear(in_features=self.seq_len, out_features=self.seq_len).to(dev)
         self.LSTM1 = nn.LSTM(input_size=args.layer, hidden_size=args.layer, num_layers=2, batch_first=True)
-        # self.fc0 = nn.Linear(in_features=lstm_hidden_size*features, out_features=output_size)
-        self.fc1 = nn.Linear(in_features=11, out_features=args.k)  # w->k, CNN filters k=3
-        self.fc2 = nn.Linear(in_features=args.k, out_features=args.layer)  # k->m, k=3, m=3
-        self.fc3 = nn.Linear(in_features=args.k+args.layer, out_features=1)  # m->1, m=3
+        self.fc1 = nn.Linear(in_features=11, out_features=args.k)
+        self.fc2 = nn.Linear(in_features=args.k, out_features=args.layer)
+        self.fc3 = nn.Linear(in_features=args.k+args.layer, out_features=1)
 
         self.layer = args.layer
         self.node = args.nodes
@@ -84,9 +83,7 @@ class GAT_LSTM(torch.nn.Module):
         atts_mat = self.gat_lyr1(occ_conv1)  # dense(nodes, nodes)
         occ_conv2 = torch.matmul(atts_mat, occ_conv1)  # (b, n, s)
         occ_conv2 = self.dropout(self.LeakyReLU(self.gcn(occ_conv2)))
-        # atts_mat = self.gat_lyr1(occ_conv2)  # dense(nodes, nodes)
-        # occ_conv3 = torch.matmul(atts_mat, occ_conv2)  # (b, n, s)
-        # occ_conv3 = self.dropout(self.LeakyReLU(self.gcn(occ_conv3)))
+
 
         atts_mat = self.gat_lyr2(x)  # dense(nodes, nodes)
         occ_conv4 = torch.matmul(atts_mat, x)  # (b, n, s)
@@ -94,29 +91,26 @@ class GAT_LSTM(torch.nn.Module):
         atts_mat = self.gat_lyr2(occ_conv4)  # dense(nodes, nodes)
         occ_conv5 = torch.matmul(atts_mat, occ_conv4)  # (b, n, s)
         occ_conv5 = self.dropout(self.LeakyReLU(self.gcn(occ_conv5)))
-        # atts_mat = self.gat_lyr2(occ_conv5)  # dense(nodes, nodes)
-        # occ_conv6 = torch.matmul(atts_mat, occ_conv5)  # (b, n, s)
-        # occ_conv6 = self.dropout(self.LeakyReLU(self.gcn(occ_conv6)))
 
-        x = torch.stack([x, occ_conv1, occ_conv2, occ_conv4, occ_conv5], dim=3)  # best
+
+        x = torch.stack([x, occ_conv1, occ_conv2, occ_conv4, occ_conv5], dim=3)
         x = x.reshape(b*n, self.seq_len, -1)
         lstm_out, _ = self.LSTM1(x)
 
         #-------------TPA------------
-        ht = lstm_out[:, -1, :]  # 当前时刻的输出,ht(b,3)
-        hw = lstm_out[:, :-1, :]  # 取前11个时刻的隐含层状态,x(b,11,3)
-        hw = torch.transpose(hw, 1, 2)  # x(b,3,11)
-        Hc = self.fc1(hw)  # 完成一维卷积，得到Hc,Hc(b,3,k) k=3
-        # Hck = torch.transpose(Hc, 1, 2) #得到Hck,Hck(b,k,3),k=3
-        Hn = self.fc2(Hc)  # 乘以系数矩阵进行维度变换去求权重,x(b,3,3)
-        ht = torch.reshape(ht, (len(ht), self.layer, 1))  # ht(b,3,1)
-        a = torch.bmm(Hn, ht)  # a(b,3,1)
-        a = torch.sigmoid(a)  # 得到权重系数,a(b,3,1)
-        a = torch.transpose(a, 1, 2)  # a (b, 1, 3)
-        vt = torch.matmul(a, Hc)  # Hc行向量加权,vt(b,3,k),k=3,  [b, 1, k]
-        ht = torch.reshape(ht, (len(ht), 1, self.layer))  # ht(b,1, 3)
+        ht = lstm_out[:, -1, :]
+        hw = lstm_out[:, :-1, :]
+        hw = torch.transpose(hw, 1, 2)
+        Hc = self.fc1(hw)
+        Hn = self.fc2(Hc)
+        ht = torch.reshape(ht, (len(ht), self.layer, 1))
+        a = torch.bmm(Hn, ht)
+        a = torch.sigmoid(a)
+        a = torch.transpose(a, 1, 2)
+        vt = torch.matmul(a, Hc)
+        ht = torch.reshape(ht, (len(ht), 1, self.layer))
         hx = torch.cat((vt, ht), dim=2)
-        y = self.fc3(hx)  # yt(b,1,1)
+        y = self.fc3(hx)
         y = torch.squeeze(y, dim=2)  # (b, 1)
         TPA_y = torch.reshape(y, (-1, self.node))
         return TPA_y, a
@@ -152,3 +146,4 @@ def test(model, x, test_y_tensor, args):
     test_y_numpy = test_y_tensor.detach().cpu().numpy()
     output = fn.get_metrics(y_pre, test_y_numpy)
     return output
+
